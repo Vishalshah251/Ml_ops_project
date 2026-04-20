@@ -7,46 +7,46 @@ log = logging.getLogger(__name__)
 
 def load_dataset(filepath: str = DATA_PATH) -> pd.DataFrame:
     """
-    Load the Twitter Customer Support dataset (twcs.csv).
+    Load the Twitter Customer Support dataset.
 
-    Strategy:
-      - inbound=True rows are customer tweets (input text)
-      - label = author_id of the company that replied to each tweet
-      - Join inbound tweets to outbound replies via response_tweet_id
-      - Restrict to top TOP_N_COMPANIES for a balanced classification task
+    Supports two formats:
+      - Raw twcs.csv (7 columns): joins inbound tweets with responding company
+      - Pre-labeled CSV (2 columns: text, company): loads directly
     """
     log.info("Loading dataset from: %s", filepath)
-    df = pd.read_csv(filepath, dtype={"response_tweet_id": str, "in_response_to_tweet_id": str})
+    df = pd.read_csv(filepath, dtype={"response_tweet_id": str})
 
-    # Build outbound lookup: tweet_id -> company author_id
-    outbound = (
-        df[~df["inbound"]][["tweet_id", "author_id"]]
-        .rename(columns={"author_id": LABEL_COLUMN})
-    )
+    # ── Pre-labeled format (text + company columns already present) ──────────
+    if TEXT_COLUMN in df.columns and LABEL_COLUMN in df.columns:
+        labeled = df[[TEXT_COLUMN, LABEL_COLUMN]].dropna().reset_index(drop=True)
+        log.info("Pre-labeled dataset detected.")
 
-    # Inbound customer tweets that have at least one response
-    inbound = df[df["inbound"]][["tweet_id", TEXT_COLUMN, "response_tweet_id"]].dropna(
-        subset=["response_tweet_id"]
-    )
+    # ── Raw twcs format — join inbound tweets with responding company ─────────
+    else:
+        if "inbound" not in df.columns:
+            raise ValueError("Unrecognized CSV format. Expected 'text'+'company' or raw twcs columns.")
 
-    # response_tweet_id may be comma-separated; take the first one
-    inbound = inbound.copy()
-    inbound["response_tweet_id"] = (
-        inbound["response_tweet_id"].str.split(",").str[0].str.strip()
-    )
-    inbound["response_tweet_id"] = pd.to_numeric(inbound["response_tweet_id"], errors="coerce")
-    inbound = inbound.dropna(subset=["response_tweet_id"])
-    inbound["response_tweet_id"] = inbound["response_tweet_id"].astype(int)
+        outbound = df[~df["inbound"]][["tweet_id", "author_id"]].rename(columns={"author_id": LABEL_COLUMN})
+        inbound = df[df["inbound"]][["tweet_id", TEXT_COLUMN, "response_tweet_id"]].dropna(
+            subset=["response_tweet_id"]
+        ).copy()
 
-    # Join to get label
-    labeled = inbound.merge(outbound, left_on="response_tweet_id", right_on="tweet_id", how="inner")
-    labeled = labeled[[TEXT_COLUMN, LABEL_COLUMN]].dropna()
+        inbound["response_tweet_id"] = (
+            inbound["response_tweet_id"].str.split(",").str[0].str.strip()
+        )
+        inbound["response_tweet_id"] = pd.to_numeric(inbound["response_tweet_id"], errors="coerce")
+        inbound = inbound.dropna(subset=["response_tweet_id"])
+        inbound["response_tweet_id"] = inbound["response_tweet_id"].astype(int)
 
-    # Restrict to top-N companies
+        merged = inbound.merge(outbound, left_on="response_tweet_id", right_on="tweet_id", how="inner")
+        labeled = merged[[TEXT_COLUMN, LABEL_COLUMN]].dropna().reset_index(drop=True)
+        log.info("Raw twcs format detected — joined inbound tweets with company responses.")
+
+    # ── Restrict to top-N companies ───────────────────────────────────────────
     top_companies = labeled[LABEL_COLUMN].value_counts().head(TOP_N_COMPANIES).index
     labeled = labeled[labeled[LABEL_COLUMN].isin(top_companies)].reset_index(drop=True)
 
-    log.info("Labeled dataset shape: %s", labeled.shape)
+    log.info("Dataset shape: %s", labeled.shape)
     log.info("Class distribution:\n%s", labeled[LABEL_COLUMN].value_counts().to_string())
 
     return labeled

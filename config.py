@@ -14,7 +14,7 @@ VECTORIZER_PATH = ARTIFACTS_DIR / "vectorizer.joblib"
 #   - label is derived by joining each inbound tweet to the company that responded
 TEXT_COLUMN = "text"
 LABEL_COLUMN = "company"
-TOP_N_COMPANIES = 10
+TOP_N_COMPANIES = 5
 
 # Feature engineering
 MAX_FEATURES = 15000
