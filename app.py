@@ -8,7 +8,8 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
-API_URL = "http://localhost:8000"
+import os
+API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 COMPANY_EMOJI = {
     "AmazonHelp": "📦",

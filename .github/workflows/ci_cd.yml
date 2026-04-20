@@ -160,6 +160,7 @@ jobs:
 
             # Restart Streamlit (nginx proxies port 80 → 8502)
             pkill -f "streamlit run app.py" || true
+            API_URL=http://localhost/api \
             nohup venv/bin/streamlit run app.py \
               --server.port 8502 \
               --server.address 0.0.0.0 \
@@ -177,7 +178,7 @@ jobs:
 
       - name: Smoke test — FastAPI
         run: |
-          curl --fail http://${{ env.VM_IP }}:8000/health \
+          curl --fail http://${{ env.VM_IP }}/api/health \
             || (echo "FastAPI smoke test failed" && exit 1)
           echo "FastAPI OK"
 
