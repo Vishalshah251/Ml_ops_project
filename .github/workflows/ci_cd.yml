@@ -158,19 +158,19 @@ jobs:
               > logs/api.log 2>&1 &
             echo "FastAPI restarted"
 
-            # Restart Streamlit
+            # Restart Streamlit (nginx proxies port 80 → 8502)
             pkill -f "streamlit run app.py" || true
             nohup venv/bin/streamlit run app.py \
-              --server.port 80 \
+              --server.port 8502 \
               --server.address 0.0.0.0 \
               --server.headless true \
               > logs/streamlit.log 2>&1 &
-            echo "Streamlit restarted"
+            echo "Streamlit restarted on port 8502"
           ENDSSH
 
       - name: Smoke test — Streamlit UI
         run: |
-          sleep 15
+          sleep 40
           curl --fail http://${{ env.VM_IP }}/ \
             || (echo "Streamlit smoke test failed" && exit 1)
           echo "Streamlit OK"
