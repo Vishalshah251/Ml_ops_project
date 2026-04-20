@@ -1,0 +1,82 @@
+name: Auto Retrain on New Data
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - "twcs.csv.dvc"        # triggers when new data is pushed via DVC
+      - "config.py"           # triggers when hyperparameters change
+
+env:
+  AZURE_WEBAPP_NAME_API: mlops-support-api
+  PYTHON_VERSION: "3.11"
+  ACCURACY_THRESHOLD: "0.70"
+
+jobs:
+  retrain:
+    name: Retrain on New Data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt dvc
+
+      - name: Pull new data from DVC remote
+        env:
+          DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+        run: |
+          dvc remote modify localremote url $DVC_REMOTE_URL
+          dvc pull twcs.csv.dvc
+
+      - name: Retrain model on new data
+        run: python train_pipeline.py twcs.csv
+
+      - name: Check accuracy threshold
+        run: |
+          python - <<'EOF'
+          import json, sys
+          with open("artifacts/metrics.json") as f:
+              metrics = json.load(f)
+          accuracy = metrics["accuracy"]
+          threshold = float("${{ env.ACCURACY_THRESHOLD }}")
+          print(f"New model accuracy: {accuracy:.4f} | Threshold: {threshold}")
+          if accuracy < threshold:
+              print(f"FAILED: new model accuracy dropped below threshold")
+              sys.exit(1)
+          print("PASSED: deploying new model")
+          EOF
+
+      - name: Push new model to DVC remote
+        env:
+          DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+        run: |
+          dvc add artifacts/model.joblib artifacts/vectorizer.joblib
+          dvc push
+
+      - name: Commit updated model pointers
+        run: |
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          git add artifacts/model.joblib.dvc artifacts/vectorizer.joblib.dvc
+          git diff --staged --quiet || git commit -m "Auto retrain: new model from updated data [skip ci]"
+          git push
+
+      - name: Deploy new model to Azure
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME_API }}
+          publish-profile: ${{ secrets.AZURE_API_PUBLISH_PROFILE }}
+          package: .
+
+      - name: Smoke test after retrain deploy
+        run: |
+          sleep 30
+          curl --fail https://${{ env.AZURE_WEBAPP_NAME_API }}.azurewebsites.net/health \
+            || (echo "Post-retrain deployment failed" && exit 1)

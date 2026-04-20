@@ -1,0 +1,176 @@
+name: MLOps CI/CD Pipeline
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+env:
+  AZURE_WEBAPP_NAME_API: mlops-support-api
+  AZURE_WEBAPP_NAME_UI: mlops-support-ui
+  PYTHON_VERSION: "3.11"
+  ACCURACY_THRESHOLD: "0.70"
+
+jobs:
+  # ── Job 1: Lint & Code Quality ─────────────────────────────────────────────
+  lint:
+    name: Lint & Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install lint dependencies
+        run: pip install flake8
+
+      - name: Run flake8
+        run: |
+          flake8 . \
+            --exclude=venv,__pycache__,.git \
+            --max-line-length=120 \
+            --ignore=E501,W503
+
+  # ── Job 2: Unit Tests ──────────────────────────────────────────────────────
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+
+      - name: Run unit tests
+        run: pytest tests/ -v --tb=short
+
+  # ── Job 3: Train & Evaluate ────────────────────────────────────────────────
+  train:
+    name: Train & Evaluate Model
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt dvc
+
+      - name: Pull data from DVC remote
+        env:
+          DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+        run: |
+          dvc remote modify localremote url $DVC_REMOTE_URL
+          dvc pull twcs.csv.dvc
+
+      - name: Train model
+        run: python train_pipeline.py twcs.csv
+
+      - name: Check accuracy threshold
+        run: |
+          python - <<'EOF'
+          import json, sys
+          with open("artifacts/metrics.json") as f:
+              metrics = json.load(f)
+          accuracy = metrics["accuracy"]
+          threshold = float("${{ env.ACCURACY_THRESHOLD }}")
+          print(f"Accuracy: {accuracy:.4f} | Threshold: {threshold}")
+          if accuracy < threshold:
+              print(f"FAILED: accuracy {accuracy:.4f} < threshold {threshold}")
+              sys.exit(1)
+          print("PASSED: accuracy above threshold")
+          EOF
+
+      - name: Upload model artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifacts
+          path: |
+            artifacts/model.joblib
+            artifacts/vectorizer.joblib
+          retention-days: 30
+
+  # ── Job 4: Deploy API to Azure Web App ─────────────────────────────────────
+  deploy-api:
+    name: Deploy FastAPI to Azure
+    runs-on: ubuntu-latest
+    needs: train
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download model artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: model-artifacts
+          path: artifacts/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME_API }}
+          publish-profile: ${{ secrets.AZURE_API_PUBLISH_PROFILE }}
+          package: .
+
+      - name: Smoke test API
+        run: |
+          sleep 30
+          curl --fail https://${{ env.AZURE_WEBAPP_NAME_API }}.azurewebsites.net/health \
+            || (echo "API health check failed" && exit 1)
+
+  # ── Job 5: Deploy Streamlit UI to Azure ────────────────────────────────────
+  deploy-ui:
+    name: Deploy Streamlit UI to Azure
+    runs-on: ubuntu-latest
+    needs: deploy-api
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Deploy Streamlit to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME_UI }}
+          publish-profile: ${{ secrets.AZURE_UI_PUBLISH_PROFILE }}
+          package: .
+
+      - name: Smoke test UI
+        run: |
+          sleep 30
+          curl --fail https://${{ env.AZURE_WEBAPP_NAME_UI }}.azurewebsites.net \
+            || (echo "UI health check failed" && exit 1)

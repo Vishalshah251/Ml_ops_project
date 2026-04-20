@@ -1,5 +1,7 @@
+import json
 import logging
 import numpy as np
+from pathlib import Path
 from sklearn.metrics import (
     accuracy_score,
     precision_recall_fscore_support,
@@ -8,6 +10,7 @@ from sklearn.metrics import (
 )
 
 log = logging.getLogger(__name__)
+METRICS_PATH = Path("artifacts/metrics.json")
 
 
 def evaluate(model, X_test, y_test) -> dict:
@@ -28,4 +31,11 @@ def evaluate(model, X_test, y_test) -> dict:
     log.info("Confusion Matrix:\n%s", np.array2string(cm))
     log.info("Classification Report:\n%s", classification_report(y_test, y_pred, zero_division=0))
 
-    return {"accuracy": acc, "precision": precision, "recall": recall, "f1": f1}
+    metrics = {"accuracy": acc, "precision": precision, "recall": recall, "f1": f1}
+
+    # Save metrics to disk so CI/CD pipeline can read and check accuracy threshold
+    METRICS_PATH.parent.mkdir(exist_ok=True)
+    METRICS_PATH.write_text(json.dumps(metrics, indent=2))
+    log.info("Metrics saved to %s", METRICS_PATH)
+
+    return metrics
