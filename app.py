@@ -11,16 +11,16 @@ import plotly.graph_objects as go
 API_URL = "http://localhost:8000"
 
 COMPANY_EMOJI = {
-    "AmazonHelp":    "📦",
-    "AppleSupport":  "🍎",
-    "Uber_Support":  "🚗",
-    "SpotifyCares":  "🎵",
-    "Delta":         "✈️",
-    "AmericanAir":   "✈️",
-    "TMobileHelp":   "📱",
-    "comcastcares":  "📺",
-    "SouthwestAir":  "✈️",
-    "VirginTrains":  "🚂",
+    "AmazonHelp": "📦",
+    "AppleSupport": "🍎",
+    "Uber_Support": "🚗",
+    "SpotifyCares": "🎵",
+    "Delta": "✈️",
+    "AmericanAir": "✈️",
+    "TMobileHelp": "📱",
+    "comcastcares": "📺",
+    "SouthwestAir": "✈️",
+    "VirginTrains": "🚂",
 }
 
 st.set_page_config(
@@ -37,8 +37,8 @@ st.markdown("Classifies a customer tweet to the most likely support team using a
 with st.sidebar:
     st.header("System Status")
     try:
-        health = requests.get(f"{API_URL}/health", timeout=3).json()
-        info   = requests.get(f"{API_URL}/model/info", timeout=3).json()
+        requests.get(f"{API_URL}/health", timeout=3).json()
+        info = requests.get(f"{API_URL}/model/info", timeout=3).json()
         st.success("API is online")
         st.metric("Model", info["model_type"])
         st.metric("Features", f"{info['num_features']:,}")
@@ -80,10 +80,10 @@ with tab1:
                     resp.raise_for_status()
                     result = resp.json()
 
-                    company  = result["predicted_company"]
-                    conf     = result["confidence"]
-                    scores   = result["all_scores"]
-                    emoji    = COMPANY_EMOJI.get(company, "🏢")
+                    company = result["predicted_company"]
+                    conf = result["confidence"]
+                    scores = result["all_scores"]
+                    emoji = COMPANY_EMOJI.get(company, "🏢")
 
                     # Result card
                     st.markdown("---")
@@ -97,7 +97,7 @@ with tab1:
                         # Horizontal bar chart of all scores
                         labels = list(scores.keys())
                         values = [v * 100 for v in scores.values()]
-                        colors = ["#1f77b4" if l != company else "#2ca02c" for l in labels]
+                        colors = ["#1f77b4" if lbl != company else "#2ca02c" for lbl in labels]
 
                         fig = go.Figure(go.Bar(
                             x=values, y=labels, orientation="h",
