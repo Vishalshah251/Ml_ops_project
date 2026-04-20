@@ -1,4 +1,4 @@
-/twcs.csv
+# /twcs.csv
 venv/
 __pycache__/
 *.pyc
