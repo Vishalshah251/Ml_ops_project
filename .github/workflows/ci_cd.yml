@@ -142,18 +142,25 @@ jobs:
             set -e
             cd ~/mlops_project
 
-            # Install/update dependencies
-            pip install -r requirements.txt --quiet
+            # Create venv if not exists (Ubuntu 24.04 blocks system pip)
+            if [ ! -d "venv" ]; then
+              python3 -m venv venv
+            fi
+
+            # Install/update dependencies inside venv
+            venv/bin/pip install -r requirements.txt --quiet
+
+            mkdir -p logs
 
             # Restart FastAPI
             pkill -f "uvicorn api.main:app" || true
-            nohup uvicorn api.main:app --host 0.0.0.0 --port 8000 \
+            nohup venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000 \
               > logs/api.log 2>&1 &
             echo "FastAPI restarted"
 
             # Restart Streamlit
             pkill -f "streamlit run app.py" || true
-            nohup streamlit run app.py \
+            nohup venv/bin/streamlit run app.py \
               --server.port 80 \
               --server.address 0.0.0.0 \
               --server.headless true \

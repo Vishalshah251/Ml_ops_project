@@ -65,7 +65,7 @@ jobs:
           ssh -i ~/.ssh/vm_key.pem azureuser@${{ env.VM_IP }} << 'ENDSSH'
             pkill -f "uvicorn api.main:app" || true
             cd ~/mlops_project
-            nohup uvicorn api.main:app --host 0.0.0.0 --port 8000 \
+            nohup venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000 \
               > logs/api.log 2>&1 &
             echo "API restarted with new model"
           ENDSSH
