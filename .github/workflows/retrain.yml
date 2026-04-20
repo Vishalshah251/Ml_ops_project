@@ -28,6 +28,13 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt dvc
 
+      - name: Cache DVC data
+        uses: actions/cache@v4
+        with:
+          path: .dvc/cache
+          key: dvc-${{ hashFiles('twcs.csv.dvc') }}
+          restore-keys: dvc-
+
       - name: Pull new data from DVC remote
         run: |
           dvc remote modify localremote url ${{ secrets.DVC_REMOTE_URL }}
