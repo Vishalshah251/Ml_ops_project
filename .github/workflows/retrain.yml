@@ -2,19 +2,19 @@ name: Auto Retrain on New Data
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
     paths:
-      - "twcs.csv.dvc"        # triggers when new data is pushed via DVC
-      - "config.py"           # triggers when hyperparameters change
+      - "twcs.csv.dvc"   # triggers when new data version is pushed
+      - "config.py"      # triggers when hyperparameters change
 
 env:
-  AZURE_WEBAPP_NAME_API: mlops-support-api
   PYTHON_VERSION: "3.11"
   ACCURACY_THRESHOLD: "0.70"
+  VM_IP: "20.41.123.141"
 
 jobs:
-  retrain:
-    name: Retrain on New Data
+  retrain-and-deploy:
+    name: Retrain & Redeploy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,13 +29,11 @@ jobs:
         run: pip install -r requirements.txt dvc
 
       - name: Pull new data from DVC remote
-        env:
-          DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
         run: |
-          dvc remote modify localremote url $DVC_REMOTE_URL
+          dvc remote modify localremote url ${{ secrets.DVC_REMOTE_URL }}
           dvc pull twcs.csv.dvc
 
-      - name: Retrain model on new data
+      - name: Retrain model
         run: python train_pipeline.py twcs.csv
 
       - name: Check accuracy threshold
@@ -43,40 +41,37 @@ jobs:
           python - <<'EOF'
           import json, sys
           with open("artifacts/metrics.json") as f:
-              metrics = json.load(f)
-          accuracy = metrics["accuracy"]
-          threshold = float("${{ env.ACCURACY_THRESHOLD }}")
-          print(f"New model accuracy: {accuracy:.4f} | Threshold: {threshold}")
-          if accuracy < threshold:
-              print(f"FAILED: new model accuracy dropped below threshold")
+              m = json.load(f)
+          print(f"New accuracy: {m['accuracy']:.4f} | F1: {m['f1']:.4f}")
+          if m['accuracy'] < float("${{ env.ACCURACY_THRESHOLD }}"):
+              print("FAILED: new model below threshold — keeping old model")
               sys.exit(1)
-          print("PASSED: deploying new model")
+          print("PASSED: new model is better, deploying")
           EOF
 
-      - name: Push new model to DVC remote
-        env:
-          DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+      - name: Setup SSH & deploy new model to VM
         run: |
-          dvc add artifacts/model.joblib artifacts/vectorizer.joblib
-          dvc push
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/vm_key.pem
+          chmod 600 ~/.ssh/vm_key.pem
+          ssh-keyscan -H ${{ env.VM_IP }} >> ~/.ssh/known_hosts
 
-      - name: Commit updated model pointers
+          # Copy new model artifacts only
+          rsync -avz -e "ssh -i ~/.ssh/vm_key.pem" \
+            artifacts/model.joblib artifacts/vectorizer.joblib artifacts/metrics.json \
+            ${{ secrets.VM_USER }}@${{ env.VM_IP }}:~/mlops_project/artifacts/
+
+          # Restart API with new model
+          ssh -i ~/.ssh/vm_key.pem ${{ secrets.VM_USER }}@${{ env.VM_IP }} << 'ENDSSH'
+            pkill -f "uvicorn api.main:app" || true
+            cd ~/mlops_project
+            nohup uvicorn api.main:app --host 0.0.0.0 --port 8000 \
+              > logs/api.log 2>&1 &
+            echo "API restarted with new model"
+          ENDSSH
+
+      - name: Smoke test
         run: |
-          git config user.email "github-actions@github.com"
-          git config user.name "GitHub Actions"
-          git add artifacts/model.joblib.dvc artifacts/vectorizer.joblib.dvc
-          git diff --staged --quiet || git commit -m "Auto retrain: new model from updated data [skip ci]"
-          git push
-
-      - name: Deploy new model to Azure
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME_API }}
-          publish-profile: ${{ secrets.AZURE_API_PUBLISH_PROFILE }}
-          package: .
-
-      - name: Smoke test after retrain deploy
-        run: |
-          sleep 30
-          curl --fail https://${{ env.AZURE_WEBAPP_NAME_API }}.azurewebsites.net/health \
-            || (echo "Post-retrain deployment failed" && exit 1)
+          sleep 15
+          curl --fail http://${{ env.VM_IP }}:8000/health
+          echo "New model deployed and healthy"

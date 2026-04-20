@@ -7,3 +7,7 @@ mlflow.db
 mlruns/
 artifacts/model.joblib
 artifacts/vectorizer.joblib
+
+
+
+logs/*.log

@@ -2,18 +2,19 @@ name: MLOps CI/CD Pipeline
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   pull_request:
-    branches: [master, main]
+    branches: [main]
 
 env:
-  AZURE_WEBAPP_NAME_API: mlops-support-api
-  AZURE_WEBAPP_NAME_UI: mlops-support-ui
   PYTHON_VERSION: "3.11"
   ACCURACY_THRESHOLD: "0.70"
+  VM_IP: "20.41.123.141"
+  VM_USER: ${{ secrets.VM_USER }}
+  APP_DIR: "/home/${{ secrets.VM_USER }}/mlops_project"
 
 jobs:
-  # ── Job 1: Lint & Code Quality ─────────────────────────────────────────────
+  # ── Job 1: Lint ────────────────────────────────────────────────────────────
   lint:
     name: Lint & Code Quality
     runs-on: ubuntu-latest
@@ -26,7 +27,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
-      - name: Install lint dependencies
+      - name: Install flake8
         run: pip install flake8
 
       - name: Run flake8
@@ -61,6 +62,8 @@ jobs:
     name: Train & Evaluate Model
     runs-on: ubuntu-latest
     needs: test
+    # Only train on push to main, not on PRs
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
 
@@ -73,11 +76,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt dvc
 
-      - name: Pull data from DVC remote
-        env:
-          DVC_REMOTE_URL: ${{ secrets.DVC_REMOTE_URL }}
+      - name: Configure DVC remote & pull data
         run: |
-          dvc remote modify localremote url $DVC_REMOTE_URL
+          dvc remote modify localremote url ${{ secrets.DVC_REMOTE_URL }}
           dvc pull twcs.csv.dvc
 
       - name: Train model
@@ -88,14 +89,12 @@ jobs:
           python - <<'EOF'
           import json, sys
           with open("artifacts/metrics.json") as f:
-              metrics = json.load(f)
-          accuracy = metrics["accuracy"]
-          threshold = float("${{ env.ACCURACY_THRESHOLD }}")
-          print(f"Accuracy: {accuracy:.4f} | Threshold: {threshold}")
-          if accuracy < threshold:
-              print(f"FAILED: accuracy {accuracy:.4f} < threshold {threshold}")
+              m = json.load(f)
+          print(f"Accuracy: {m['accuracy']:.4f} | F1: {m['f1']:.4f}")
+          if m['accuracy'] < float("${{ env.ACCURACY_THRESHOLD }}"):
+              print("FAILED: accuracy below threshold — aborting deploy")
               sys.exit(1)
-          print("PASSED: accuracy above threshold")
+          print("PASSED: deploying")
           EOF
 
       - name: Upload model artifacts
@@ -105,14 +104,15 @@ jobs:
           path: |
             artifacts/model.joblib
             artifacts/vectorizer.joblib
-          retention-days: 30
+            artifacts/metrics.json
+          retention-days: 7
 
-  # ── Job 4: Deploy API to Azure Web App ─────────────────────────────────────
-  deploy-api:
-    name: Deploy FastAPI to Azure
+  # ── Job 4: Deploy to Azure VM via SSH ─────────────────────────────────────
+  deploy:
+    name: Deploy to Azure VM
     runs-on: ubuntu-latest
     needs: train
-    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
 
@@ -122,55 +122,63 @@ jobs:
           name: model-artifacts
           path: artifacts/
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME_API }}
-          publish-profile: ${{ secrets.AZURE_API_PUBLISH_PROFILE }}
-          package: .
-
-      - name: Smoke test API
+      - name: Setup SSH key
         run: |
-          sleep 30
-          curl --fail https://${{ env.AZURE_WEBAPP_NAME_API }}.azurewebsites.net/health \
-            || (echo "API health check failed" && exit 1)
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/vm_key.pem
+          chmod 600 ~/.ssh/vm_key.pem
+          ssh-keyscan -H ${{ env.VM_IP }} >> ~/.ssh/known_hosts
 
-  # ── Job 5: Deploy Streamlit UI to Azure ────────────────────────────────────
-  deploy-ui:
-    name: Deploy Streamlit UI to Azure
-    runs-on: ubuntu-latest
-    needs: deploy-api
-    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Deploy Streamlit to Azure Web App
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME_UI }}
-          publish-profile: ${{ secrets.AZURE_UI_PUBLISH_PROFILE }}
-          package: .
-
-      - name: Smoke test UI
+      - name: Copy code to VM
         run: |
-          sleep 30
-          curl --fail https://${{ env.AZURE_WEBAPP_NAME_UI }}.azurewebsites.net \
-            || (echo "UI health check failed" && exit 1)
+          rsync -avz --exclude=venv --exclude=__pycache__ \
+            --exclude=.git --exclude=twcs.csv --exclude=mlruns \
+            -e "ssh -i ~/.ssh/vm_key.pem" \
+            ./ ${{ env.VM_USER }}@${{ env.VM_IP }}:${{ env.APP_DIR }}/
+
+      - name: Deploy & restart services on VM
+        run: |
+          ssh -i ~/.ssh/vm_key.pem ${{ env.VM_USER }}@${{ env.VM_IP }} << 'ENDSSH'
+            set -e
+            cd ~/mlops_project
+
+            # Install/update dependencies
+            pip install -r requirements.txt --quiet
+
+            # Restart FastAPI
+            pkill -f "uvicorn api.main:app" || true
+            nohup uvicorn api.main:app --host 0.0.0.0 --port 8000 \
+              > logs/api.log 2>&1 &
+            echo "FastAPI restarted"
+
+            # Restart Streamlit
+            pkill -f "streamlit run app.py" || true
+            nohup streamlit run app.py \
+              --server.port 80 \
+              --server.address 0.0.0.0 \
+              --server.headless true \
+              > logs/streamlit.log 2>&1 &
+            echo "Streamlit restarted"
+          ENDSSH
+
+      - name: Smoke test — Streamlit UI
+        run: |
+          sleep 15
+          curl --fail http://${{ env.VM_IP }}/ \
+            || (echo "Streamlit smoke test failed" && exit 1)
+          echo "Streamlit OK"
+
+      - name: Smoke test — FastAPI
+        run: |
+          curl --fail http://${{ env.VM_IP }}:8000/health \
+            || (echo "FastAPI smoke test failed" && exit 1)
+          echo "FastAPI OK"
+
+      - name: Post deploy summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Service | URL |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Streamlit UI | http://${{ env.VM_IP }}/ |" >> $GITHUB_STEP_SUMMARY
+          echo "| FastAPI | http://${{ env.VM_IP }}:8000 |" >> $GITHUB_STEP_SUMMARY
+          echo "| API Docs | http://${{ env.VM_IP }}:8000/docs |" >> $GITHUB_STEP_SUMMARY
