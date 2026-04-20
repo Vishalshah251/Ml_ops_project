@@ -25,14 +25,17 @@ COMPANY_EMOJI = {
 }
 
 st.set_page_config(
-    page_title="Support Ticket Classifier",
-    page_icon="🎯",
+    page_title="Support Ticket Classifier v2",
+    page_icon="🚀",
     layout="wide",
 )
 
 # ── Header ────────────────────────────────────────────────────────────────────
-st.title("🎯 Twitter Customer Support Classifier")
-st.markdown("Classifies a customer tweet to the most likely support team using a **LinearSVC + TF-IDF** model.")
+st.title("🚀 Twitter Customer Support Classifier v2")
+st.markdown(
+    "Classifies a customer tweet to the most likely support team using a **LinearSVC + TF-IDF** model. "
+    "| _Deployed via GitHub Actions CI/CD_"
+)
 
 # ── Sidebar — API health & model info ─────────────────────────────────────────
 with st.sidebar:
