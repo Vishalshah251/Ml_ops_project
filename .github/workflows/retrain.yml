@@ -59,10 +59,10 @@ jobs:
           # Copy new model artifacts only
           rsync -avz -e "ssh -i ~/.ssh/vm_key.pem" \
             artifacts/model.joblib artifacts/vectorizer.joblib artifacts/metrics.json \
-            ${{ secrets.VM_USER }}@${{ env.VM_IP }}:~/mlops_project/artifacts/
+            azureuser@${{ env.VM_IP }}:~/mlops_project/artifacts/
 
           # Restart API with new model
-          ssh -i ~/.ssh/vm_key.pem ${{ secrets.VM_USER }}@${{ env.VM_IP }} << 'ENDSSH'
+          ssh -i ~/.ssh/vm_key.pem azureuser@${{ env.VM_IP }} << 'ENDSSH'
             pkill -f "uvicorn api.main:app" || true
             cd ~/mlops_project
             nohup uvicorn api.main:app --host 0.0.0.0 --port 8000 \

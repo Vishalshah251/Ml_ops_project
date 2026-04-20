@@ -10,8 +10,8 @@ env:
   PYTHON_VERSION: "3.11"
   ACCURACY_THRESHOLD: "0.70"
   VM_IP: "20.41.123.141"
-  VM_USER: ${{ secrets.VM_USER }}
-  APP_DIR: "/home/${{ secrets.VM_USER }}/mlops_project"
+  VM_USER: "azureuser"
+  APP_DIR: "/home/azureuser/mlops_project"
 
 jobs:
   # ── Job 1: Lint ────────────────────────────────────────────────────────────
