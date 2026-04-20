@@ -1,0 +1,9 @@
+/twcs.csv
+venv/
+__pycache__/
+*.pyc
+.env
+mlflow.db
+mlruns/
+artifacts/model.joblib
+artifacts/vectorizer.joblib

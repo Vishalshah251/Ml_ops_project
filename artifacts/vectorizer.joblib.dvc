@@ -1,0 +1,5 @@
+outs:
+- md5: a1e528b6555cd2864238397bcd430a0f
+  size: 588061
+  hash: md5
+  path: vectorizer.joblib
