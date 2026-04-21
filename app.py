@@ -54,7 +54,7 @@ with st.sidebar:
         st.error("API offline — start with:\n```\nuvicorn api.main:app --reload\n```")
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["Single Predict", "Batch Predict", "MLflow Runs"])
+tab1, tab2, tab3, tab4 = st.tabs(["Single Predict", "Batch Predict", "MLflow Runs", "Logs"])
 
 # ── Tab 1: Single Predict ─────────────────────────────────────────────────────
 with tab1:
@@ -233,3 +233,51 @@ with tab3:
 
     except Exception as e:
         st.error(f"Could not load MLflow runs: {e}")
+
+# ── Tab 4: Logs ───────────────────────────────────────────────────────────────
+with tab4:
+    st.subheader("Live Logs")
+
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        log_source = st.selectbox("Log source", ["api", "train"])
+        log_lines = st.slider("Lines to show", 10, 200, 50)
+        refresh = st.button("Refresh", use_container_width=True)
+
+    if refresh or True:
+        try:
+            resp = requests.get(
+                f"{API_URL}/logs",
+                params={"source": log_source, "lines": log_lines},
+                timeout=5,
+            )
+            resp.raise_for_status()
+            entries = resp.json().get("entries", [])
+
+            if not entries:
+                st.info("No log entries yet.")
+            else:
+                rows = []
+                for e in entries:
+                    rows.append({
+                        "Time": e.get("ts", ""),
+                        "Level": e.get("level", ""),
+                        "Logger": e.get("logger", ""),
+                        "Message": e.get("msg", str(e)),
+                    })
+
+                df_logs = pd.DataFrame(rows)
+
+                def _color_level(val):
+                    colors = {"ERROR": "background-color:#ffcccc",
+                              "WARNING": "background-color:#fff3cd",
+                              "INFO": ""}
+                    return colors.get(val, "")
+
+                styled = df_logs.style.applymap(_color_level, subset=["Level"])
+                st.dataframe(styled, use_container_width=True, hide_index=True)
+
+        except requests.exceptions.ConnectionError:
+            st.error("Cannot reach API.")
+        except Exception as e:
+            st.error(f"Error loading logs: {e}")

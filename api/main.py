@@ -5,10 +5,12 @@ Endpoints:
   POST /predict/batch  — classify a list of tweets
   GET  /health         — liveness check
   GET  /model/info     — model metadata
+  GET  /logs           — tail recent log lines
 """
 
 import re
-import logging
+import time
+import json
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -17,11 +19,14 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 from nltk.tokenize import word_tokenize
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger(__name__)
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from logger import get_logger, LOGS_DIR  # noqa: E402
+
+log = get_logger("api")
 
 ARTIFACTS_DIR = Path(__file__).resolve().parent.parent / "artifacts"
 MODEL_PATH = ARTIFACTS_DIR / "model.joblib"
@@ -59,7 +64,7 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"Artifacts not found in {ARTIFACTS_DIR}. Run train_pipeline.py first.")
     model = joblib.load(MODEL_PATH)
     vectorizer = joblib.load(VECTORIZER_PATH)
-    log.info("Model and vectorizer loaded.")
+    log.info("Startup complete | model=%s features=%d", type(model).__name__, vectorizer.max_features)
     yield
     log.info("Shutting down API.")
 
@@ -107,6 +112,7 @@ class ModelInfoResponse(BaseModel):
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 @app.get("/health", response_model=HealthResponse, tags=["System"])
 def health():
+    log.info("Health check | model_loaded=%s", model is not None)
     return {"status": "ok", "model_loaded": model is not None}
 
 
@@ -127,6 +133,7 @@ def predict(req: PredictRequest):
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
+    t0 = time.time()
     clean = _clean(req.text)
     if not clean.strip():
         raise HTTPException(status_code=422, detail="Text is empty after cleaning.")
@@ -136,6 +143,12 @@ def predict(req: PredictRequest):
     probas = model.predict_proba(X)[0]
     scores = {cls: round(float(p), 4) for cls, p in zip(model.classes_, probas)}
     confidence = round(float(max(probas)), 4)
+    elapsed_ms = round((time.time() - t0) * 1000, 1)
+
+    log.info(
+        "predict | company=%s confidence=%.4f elapsed_ms=%.1f text=%.60r",
+        predicted, confidence, elapsed_ms, req.text,
+    )
 
     return {
         "text": req.text,
@@ -150,6 +163,7 @@ def predict_batch(req: BatchRequest):
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
+    t0 = time.time()
     results = []
     for text in req.texts:
         clean = _clean(text)
@@ -172,4 +186,27 @@ def predict_batch(req: BatchRequest):
             "all_scores": dict(sorted(scores.items(), key=lambda x: x[1], reverse=True)),
         })
 
+    elapsed_ms = round((time.time() - t0) * 1000, 1)
+    log.info("predict_batch | count=%d elapsed_ms=%.1f", len(req.texts), elapsed_ms)
+
     return {"results": results}
+
+
+@app.get("/logs", tags=["System"])
+def get_logs(source: str = Query("api", enum=["api", "train"]), lines: int = Query(50, ge=1, le=500)):
+    """Return the last N lines from a log file as parsed JSON entries."""
+    log_file = LOGS_DIR / f"{source}.log"
+    if not log_file.exists():
+        return {"source": source, "entries": []}
+
+    raw = log_file.read_text().splitlines()
+    tail = raw[-lines:]
+
+    entries = []
+    for line in tail:
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            entries.append({"msg": line})
+
+    return {"source": source, "entries": entries}
