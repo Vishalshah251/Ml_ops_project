@@ -28,11 +28,28 @@ def _clean(text: str, lemmatizer: WordNetLemmatizer, stop_words: set) -> str:
     return " ".join(tokens)
 
 
+_lemmatizer: WordNetLemmatizer | None = None
+_stop_words: set | None = None
+
+
+def _get_nltk_objects():
+    global _lemmatizer, _stop_words
+    if _lemmatizer is None:
+        _ensure_nltk_resources()
+        _lemmatizer = WordNetLemmatizer()
+        _stop_words = set(stopwords.words("english"))
+    return _lemmatizer, _stop_words
+
+
+def clean_text(text: str) -> str:
+    """Clean a single tweet string. Safe to call from the API at inference time."""
+    lemmatizer, stop_words = _get_nltk_objects()
+    return _clean(str(text), lemmatizer, stop_words)
+
+
 def preprocess(df: pd.DataFrame) -> pd.DataFrame:
     """Apply full text cleaning pipeline to the 'text' column."""
-    _ensure_nltk_resources()
-    lemmatizer = WordNetLemmatizer()
-    stop_words = set(stopwords.words("english"))
+    lemmatizer, stop_words = _get_nltk_objects()
 
     log.info("Preprocessing %d text samples...", len(df))
     df = df.copy()

@@ -8,47 +8,25 @@ Endpoints:
   GET  /logs           — tail recent log lines
 """
 
-import re
 import time
 import json
 from pathlib import Path
 from contextlib import asynccontextmanager
 
 import joblib
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-from nltk.tokenize import word_tokenize
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from logger import get_logger, LOGS_DIR  # noqa: E402
+from preprocessing.cleaner import clean_text  # noqa: E402
 
 log = get_logger("api")
 
 ARTIFACTS_DIR = Path(__file__).resolve().parent.parent / "artifacts"
 MODEL_PATH = ARTIFACTS_DIR / "model.joblib"
 VECTORIZER_PATH = ARTIFACTS_DIR / "vectorizer.joblib"
-
-# ── NLTK setup ────────────────────────────────────────────────────────────────
-for resource in ["punkt", "punkt_tab", "stopwords", "wordnet", "omw-1.4"]:
-    nltk.download(resource, quiet=True)
-
-_lemmatizer = WordNetLemmatizer()
-_stop_words = set(stopwords.words("english"))
-
-
-def _clean(text: str) -> str:
-    text = re.sub(r"@\w+", " ", text)
-    text = re.sub(r"http\S+|www\S+", " ", text)
-    text = text.lower()
-    text = re.sub(r"[^a-z\s]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    tokens = word_tokenize(text)
-    tokens = [_lemmatizer.lemmatize(t) for t in tokens if t not in _stop_words and len(t) > 2]
-    return " ".join(tokens)
 
 
 # ── App lifespan — load artifacts once at startup ────────────────────────────
@@ -134,7 +112,7 @@ def predict(req: PredictRequest):
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     t0 = time.time()
-    clean = _clean(req.text)
+    clean = clean_text(req.text)
     if not clean.strip():
         raise HTTPException(status_code=422, detail="Text is empty after cleaning.")
 
@@ -166,7 +144,7 @@ def predict_batch(req: BatchRequest):
     t0 = time.time()
     results = []
     for text in req.texts:
-        clean = _clean(text)
+        clean = clean_text(text)
         if not clean.strip():
             results.append({
                 "text": text,
